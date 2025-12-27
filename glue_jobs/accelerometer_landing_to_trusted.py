@@ -1,40 +1,38 @@
-from awsglue.context import GlueContext
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
-from awsglue.dynamicframe import DynamicFrame
-from pyspark.sql.functions import trim, col
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsgluedq.transforms import EvaluateDataQuality
 
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
 
-# Read accelerometer landing table from Glue Data Catalog
-accel_landing = glueContext.create_dynamic_frame.from_catalog(
-    database="stedi_db",
-    table_name="accelerometer_landing"
-)
-accel_df = accel_landing.toDF()
+# Default ruleset used by all target nodes with data quality enabled
+DEFAULT_DATA_QUALITY_RULESET = """
+    Rules = [
+        ColumnCount > 0
+    ]
+"""
 
-# Read customer_trusted emails to filter consenting users
-customer_trusted = glueContext.create_dynamic_frame.from_catalog(
-    database="stedi_db",
-    table_name="customer_trusted"
-).toDF().select("email").distinct()
+# Script generated for node Amazon S3
+AmazonS3_node1766872189011 = glueContext.create_dynamic_frame.from_options(format_options={"multiLine": "true"}, connection_type="s3", format="json", connection_options={"paths": ["s3://d609-stedi-ankur-2025/landing/accelerometer_landing/"], "recurse": True}, transformation_ctx="AmazonS3_node1766872189011")
 
-# Normalize join keys
-accel_df = accel_df.withColumn("user", trim(col("user")))
-customer_trusted = customer_trusted.withColumn("email", trim(col("email")))
+# Script generated for node Amazon S3
+AmazonS3_node1766872263719 = glueContext.create_dynamic_frame.from_options(format_options={"multiLine": "true"}, connection_type="s3", format="json", connection_options={"paths": ["s3://d609-stedi-ankur-2025/trusted/customer_trusted/"], "recurse": True}, transformation_ctx="AmazonS3_node1766872263719")
 
-# Keep only accelerometer records for consenting customers
-accel_filtered = accel_df.join(customer_trusted, accel_df.user == customer_trusted.email, "inner").drop(customer_trusted.email)
+# Script generated for node Join
+Join_node1766872391051 = Join.apply(frame1=AmazonS3_node1766872189011, frame2=AmazonS3_node1766872263719, keys1=["user"], keys2=["email"], transformation_ctx="Join_node1766872391051")
 
-# Remove exact duplicate rows
-accel_filtered = accel_filtered.dropDuplicates()
-
-# Convert back to DynamicFrame and write Parquet to S3 (no catalog update)
-accel_dyf = DynamicFrame.fromDF(accel_filtered, glueContext, "accel_dyf")
-glueContext.write_dynamic_frame.from_options(
-    frame=accel_dyf,
-    connection_type="s3",
-    connection_options={"path":"s3://d609-stedi-ankur-2025/trusted/accelerometer_trusted/"},
-    format="parquet"
-)
+# Script generated for node Amazon S3
+EvaluateDataQuality().process_rows(frame=Join_node1766872391051, ruleset=DEFAULT_DATA_QUALITY_RULESET, publishing_options={"dataQualityEvaluationContext": "EvaluateDataQuality_node1766872163394", "enableDataQualityResultsPublishing": True}, additional_options={"dataQualityResultsPublishing.strategy": "BEST_EFFORT", "observations.scope": "ALL"})
+AmazonS3_node1766872439377 = glueContext.getSink(path="s3://d609-stedi-ankur-2025/trusted/accelerometer_trusted/", connection_type="s3", updateBehavior="UPDATE_IN_DATABASE", partitionKeys=[], enableUpdateCatalog=True, transformation_ctx="AmazonS3_node1766872439377")
+AmazonS3_node1766872439377.setCatalogInfo(catalogDatabase="stedi_db",catalogTableName="accelerometer_trusted")
+AmazonS3_node1766872439377.setFormat("json")
+AmazonS3_node1766872439377.writeFrame(Join_node1766872391051)
+job.commit()

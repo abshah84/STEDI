@@ -1,41 +1,51 @@
-from awsglue.context import GlueContext
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
-from awsglue.dynamicframe import DynamicFrame
-from pyspark.sql.functions import trim, col
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsgluedq.transforms import EvaluateDataQuality
+from awsglue import DynamicFrame
 
+def sparkSqlQuery(glueContext, query, mapping, transformation_ctx) -> DynamicFrame:
+    for alias, frame in mapping.items():
+        frame.toDF().createOrReplaceTempView(alias)
+    result = spark.sql(query)
+    return DynamicFrame.fromDF(result, glueContext, transformation_ctx)
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
 
-# Read step trainer landing table from Glue Data Catalog
-step_landing = glueContext.create_dynamic_frame.from_catalog(
-    database="stedi_db",
-    table_name="step_trainer_landing"
+# Default ruleset used by all target nodes with data quality enabled
+DEFAULT_DATA_QUALITY_RULESET = """
+    Rules = [
+        ColumnCount > 0
+    ]
+"""
+
+# Script generated for node Amazon S3
+AmazonS3_node1766875789318 = glueContext.create_dynamic_frame.from_catalog(database="stedi_db", table_name="customer_curated", transformation_ctx="AmazonS3_node1766875789318")
+
+# Script generated for node Amazon S3
+AmazonS3_node1766875734612 = glueContext.create_dynamic_frame.from_options(format_options={"multiLine": "true"}, connection_type="s3", format="json", connection_options={"paths": ["s3://d609-stedi-ankur-2025/landing/step_trainer_landing/"], "recurse": True}, transformation_ctx="AmazonS3_node1766875734612")
+
+# Script generated for node SQL Query
+SqlQuery1744 = '''
+SELECT s.*
+FROM step_trainer_landing s
+WHERE s.serialNumber IN (
+    SELECT serialNumber FROM customer_curated
 )
-step_df = step_landing.toDF()
+'''
+SQLQuery_node1766875935538 = sparkSqlQuery(glueContext, query = SqlQuery1744, mapping = {"step_trainer_landing":AmazonS3_node1766875734612, "customer_curated":AmazonS3_node1766875789318}, transformation_ctx = "SQLQuery_node1766875935538")
 
-# Read customer_trusted to filter consenting users by serialNumber mapping
-# If your join key is different (e.g., serialNumber vs user/email), adjust accordingly.
-customer_trusted = glueContext.create_dynamic_frame.from_catalog(
-    database="stedi_db",
-    table_name="customer_trusted"
-).toDF().select("serialNumber").distinct()
-
-# Normalize join keys
-step_df = step_df.withColumn("serialNumber", trim(col("serialNumber")))
-customer_trusted = customer_trusted.withColumn("serialNumber", trim(col("serialNumber")))
-
-# Keep only step trainer records for consenting customers
-step_filtered = step_df.join(customer_trusted, step_df.serialNumber == customer_trusted.serialNumber, "inner").drop(customer_trusted.serialNumber)
-
-# Remove exact duplicate rows
-step_filtered = step_filtered.dropDuplicates()
-
-# Convert back to DynamicFrame and write Parquet to S3 (no catalog update)
-step_dyf = DynamicFrame.fromDF(step_filtered, glueContext, "step_dyf")
-glueContext.write_dynamic_frame.from_options(
-    frame=step_dyf,
-    connection_type="s3",
-    connection_options={"path":"s3://d609-stedi-ankur-2025/trusted/step_trainer_trusted/"},
-    format="parquet"
-)
+# Script generated for node Amazon S3
+EvaluateDataQuality().process_rows(frame=SQLQuery_node1766875935538, ruleset=DEFAULT_DATA_QUALITY_RULESET, publishing_options={"dataQualityEvaluationContext": "EvaluateDataQuality_node1766875546623", "enableDataQualityResultsPublishing": True}, additional_options={"dataQualityResultsPublishing.strategy": "BEST_EFFORT", "observations.scope": "ALL"})
+AmazonS3_node1766875999929 = glueContext.getSink(path="s3://d609-stedi-ankur-2025/trusted/step_trainer_trusted/", connection_type="s3", updateBehavior="UPDATE_IN_DATABASE", partitionKeys=[], enableUpdateCatalog=True, transformation_ctx="AmazonS3_node1766875999929")
+AmazonS3_node1766875999929.setCatalogInfo(catalogDatabase="stedi_db",catalogTableName="step_trainer_trusted")
+AmazonS3_node1766875999929.setFormat("glueparquet", compression="snappy")
+AmazonS3_node1766875999929.writeFrame(SQLQuery_node1766875935538)
+job.commit()

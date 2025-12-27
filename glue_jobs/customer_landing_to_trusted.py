@@ -1,30 +1,46 @@
-from awsglue.context import GlueContext
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
-from awsglue.dynamicframe import DynamicFrame
-from pyspark.sql.functions import trim, col
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsgluedq.transforms import EvaluateDataQuality
+from awsglue import DynamicFrame
 
+def sparkSqlQuery(glueContext, query, mapping, transformation_ctx) -> DynamicFrame:
+    for alias, frame in mapping.items():
+        frame.toDF().createOrReplaceTempView(alias)
+    result = spark.sql(query)
+    return DynamicFrame.fromDF(result, glueContext, transformation_ctx)
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
 
-# Read landing table from Glue Data Catalog
-customer_landing = glueContext.create_dynamic_frame.from_catalog(
-    database="stedi_db",
-    table_name="customer_landing"
-)
-df = customer_landing.toDF()
+# Default ruleset used by all target nodes with data quality enabled
+DEFAULT_DATA_QUALITY_RULESET = """
+    Rules = [
+        ColumnCount > 0
+    ]
+"""
 
-# Filter consenting customers
-consenting_df = df.filter(
-    (col("sharewithresearchasofdate").isNotNull()) &
-    (trim(col("sharewithresearchasofdate")) != "")
-)
+# Script generated for node Amazon S3
+AmazonS3_node1766869324427 = glueContext.create_dynamic_frame.from_options(format_options={"multiLine": "true"}, connection_type="s3", format="json", connection_options={"paths": ["s3://d609-stedi-ankur-2025/landing/customer_landing/"], "recurse": True}, transformation_ctx="AmazonS3_node1766869324427")
 
-# Convert back to DynamicFrame and write Parquet
-consenting_dyf = DynamicFrame.fromDF(consenting_df, glueContext, "consenting_dyf")
-glueContext.write_dynamic_frame.from_options(
-    frame=consenting_dyf,
-    connection_type="s3",
-    connection_options={"path":"s3://d609-stedi-ankur-2025/trusted/customer_trusted/"},
-    format="parquet"
-)
+# Script generated for node SQL Query
+SqlQuery2123 = '''
+SELECT * 
+FROM myDataSource 
+WHERE sharewithresearchasofdate IS NOT NULL
+'''
+SQLQuery_node1766871684241 = sparkSqlQuery(glueContext, query = SqlQuery2123, mapping = {"myDataSource":AmazonS3_node1766869324427}, transformation_ctx = "SQLQuery_node1766871684241")
+
+# Script generated for node Amazon S3
+EvaluateDataQuality().process_rows(frame=SQLQuery_node1766871684241, ruleset=DEFAULT_DATA_QUALITY_RULESET, publishing_options={"dataQualityEvaluationContext": "EvaluateDataQuality_node1766871617592", "enableDataQualityResultsPublishing": True}, additional_options={"dataQualityResultsPublishing.strategy": "BEST_EFFORT", "observations.scope": "ALL"})
+AmazonS3_node1766871750281 = glueContext.getSink(path="s3://d609-stedi-ankur-2025/trusted/customer_trusted/", connection_type="s3", updateBehavior="UPDATE_IN_DATABASE", partitionKeys=[], enableUpdateCatalog=True, transformation_ctx="AmazonS3_node1766871750281")
+AmazonS3_node1766871750281.setCatalogInfo(catalogDatabase="stedi_db",catalogTableName="customer_trusted")
+AmazonS3_node1766871750281.setFormat("json")
+AmazonS3_node1766871750281.writeFrame(SQLQuery_node1766871684241)
+job.commit()
